@@ -5,10 +5,21 @@ local UserInputService = game:GetService("UserInputService")
 local StarterGui = game:GetService("StarterGui")
 local CoreGui = game:GetService("CoreGui")
 
+local windowThemes = {
+    "cherry",
+    "orange",
+    "lemon",
+    "lime",
+    "raspberry",
+    "blueberry",
+    "grape",
+    "watermelon"
+}
+
 local uiLoader = loadstring(game:HttpGet("https://raw.githubusercontent.com/topitbopit/dollarware/main/library.lua", true))
 local ui = uiLoader({
 	rounding = false,
-	theme = "orange",
+	theme = windowThemes[math.random(1, #windowThemes)],
 	smoothDragging = true
 })
 
@@ -662,7 +673,7 @@ local function WatchPlayer(player)
 end
 
 local window = ui.newWindow({
-	text = "RAT",
+	text = "rat.lua",
 	resize = true,
 	size = Vector2.new(560, 380),
 	position = nil
