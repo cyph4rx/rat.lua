@@ -41,12 +41,15 @@ local aimbotBindType = Enum.UserInputType.MouseButton2
 local aimbotBindKey = nil
 
 local AIMBOT_SMOOTHNESS = 0.12
+local AIMBOT_FOV_RADIUS = 150
 local TRACER_DISTANCE = 100
 local espColor = Color3.fromRGB(0, 255, 0)
 local espDrawings = {}
 local aimbotExclusions = {}
 local aimbotExclusionNames = {}
 local exclusionsLabel = nil
+local PLAYER_FOV = camera and camera.FieldOfView or 70
+local isUnloaded = false
 
 StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, true)
 
@@ -64,6 +67,25 @@ espOverlay.BackgroundTransparency = 1
 espOverlay.Size = UDim2.fromScale(1, 1)
 espOverlay.ZIndex = 100
 espOverlay.Parent = espGui
+
+local aimbotFOVCircle = Instance.new("Frame")
+aimbotFOVCircle.Name = "AimbotFOVCircle"
+aimbotFOVCircle.AnchorPoint = Vector2.new(0.5, 0.5)
+aimbotFOVCircle.BackgroundTransparency = 1
+aimbotFOVCircle.BorderSizePixel = 0
+aimbotFOVCircle.Visible = false
+aimbotFOVCircle.ZIndex = 101
+aimbotFOVCircle.Parent = espOverlay
+
+local aimbotFOVCorner = Instance.new("UICorner")
+aimbotFOVCorner.CornerRadius = UDim.new(1, 0)
+aimbotFOVCorner.Parent = aimbotFOVCircle
+
+local aimbotFOVStroke = Instance.new("UIStroke")
+aimbotFOVStroke.Color = Color3.fromRGB(255, 255, 255)
+aimbotFOVStroke.Transparency = 0.15
+aimbotFOVStroke.Thickness = 1
+aimbotFOVStroke.Parent = aimbotFOVCircle
 
 local function Notify(title, text)
 	task.spawn(function()
@@ -488,6 +510,15 @@ local function SetWalkSpeed(value)
 	end
 end
 
+local function SetPlayerFOV(value)
+	PLAYER_FOV = math.clamp(tonumber(value) or PLAYER_FOV, 40, 120)
+	camera = Workspace.CurrentCamera
+
+	if camera then
+		camera.FieldOfView = PLAYER_FOV
+	end
+end
+
 local function NormalizeName(text)
 	return tostring(text):lower():match("^%s*(.-)%s*$")
 end
@@ -605,6 +636,32 @@ local function IsAimbotBind(input)
 	return input.UserInputType == aimbotBindType
 end
 
+local function UpdateAimbotFOVCircle()
+	camera = Workspace.CurrentCamera
+
+	if not camera then
+		aimbotFOVCircle.Visible = false
+		return
+	end
+
+	local diameter = AIMBOT_FOV_RADIUS * 2
+	local viewportCenter = camera.ViewportSize / 2
+
+	aimbotFOVCircle.Position = UDim2.fromOffset(viewportCenter.X, viewportCenter.Y)
+	aimbotFOVCircle.Size = UDim2.fromOffset(diameter, diameter)
+	aimbotFOVCircle.Visible = aimbotEnabled
+end
+
+local function IsScreenPointInAimbotFOV(screenPosition)
+	camera = Workspace.CurrentCamera
+
+	if not camera then
+		return false
+	end
+
+	return (screenPosition - (camera.ViewportSize / 2)).Magnitude <= AIMBOT_FOV_RADIUS
+end
+
 local function IsValidAimbotTarget(model)
 	if not IsTargetModel(model) then
 		return false
@@ -638,7 +695,7 @@ local function GetClosestHeadToCrosshair()
 				local screenPosition = Vector2.new(screenPoint.X, screenPoint.Y)
 				local distance = (screenPosition - viewportCenter).Magnitude
 
-				if distance < closestDistance then
+				if IsScreenPointInAimbotFOV(screenPosition) and distance < closestDistance then
 					closestDistance = distance
 					closestHead = head
 				end
@@ -728,6 +785,17 @@ aimbotSection:addSlider({
 }, function(newValue)
 	AIMBOT_SMOOTHNESS = tonumber(newValue) or AIMBOT_SMOOTHNESS
 end):setTooltip("Lower is smoother. Higher is snappier.")
+
+aimbotSection:addSlider({
+	text = "FOV Radius",
+	min = 25,
+	max = 500,
+	step = 5,
+	val = AIMBOT_FOV_RADIUS
+}, function(newValue)
+	AIMBOT_FOV_RADIUS = tonumber(newValue) or AIMBOT_FOV_RADIUS
+	UpdateAimbotFOVCircle()
+end):setTooltip("Targets must be inside the circle to lock.")
 
 aimbotSection:addTextbox({
 	text = "Hold Bind"
@@ -876,6 +944,16 @@ movementSection:addTextbox({
 	end
 end)
 
+movementSection:addSlider({
+	text = "FOV",
+	min = 40,
+	max = 120,
+	step = 1,
+	val = PLAYER_FOV
+}, function(newValue)
+	SetPlayerFOV(newValue)
+end):setTooltip("Changes your camera field of view.")
+
 local interfaceSection = settingsMenu:addSection({
 	text = "Interface",
 	side = "left",
@@ -886,6 +964,10 @@ interfaceSection:addButton({
 	text = "Unload",
 	style = "large"
 }, function()
+	isUnloaded = true
+	aimbotEnabled = false
+	aimbotBindHeld = false
+	aimbotFOVCircle.Visible = false
 	SetESP(false)
 	espGui:Destroy()
 	ui:destroy()
@@ -942,6 +1024,18 @@ UserInputService.InputEnded:Connect(function(input)
 end)
 
 RunService.RenderStepped:Connect(function()
+	if isUnloaded then
+		return
+	end
+
+	UpdateAimbotFOVCircle()
+
+	camera = Workspace.CurrentCamera
+
+	if camera and camera.FieldOfView ~= PLAYER_FOV then
+		camera.FieldOfView = PLAYER_FOV
+	end
+
 	if aimbotEnabled and aimbotBindHeld then
 		local targetHead = GetClosestHeadToCrosshair()
 
