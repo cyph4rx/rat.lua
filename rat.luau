@@ -4,6 +4,7 @@ local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
 local StarterGui = game:GetService("StarterGui")
 local CoreGui = game:GetService("CoreGui")
+local Lighting = game:GetService("Lighting")
 
 local windowThemes = {
     "cherry",
@@ -34,6 +35,7 @@ local espInfoEnabled = true
 local espTracersEnabled = true
 local espBonesEnabled = true
 local espTeamColorEnabled = true
+local fullbrightEnabled = false
 local aimbotEnabled = false
 local mouseAimbotEnabled = false
 local wallCheckEnabled = true
@@ -45,11 +47,15 @@ local aimbotBindKey = nil
 local AIMBOT_SMOOTHNESS = 0.12
 local AIMBOT_FOV_RADIUS = 150
 local TRACER_DISTANCE = 100
+local ESP_DISTANCE_CAP = 1000
+local ESP_DISTANCE_UNCAPPED = true
 local espColor = Color3.fromRGB(0, 255, 0)
 local espDrawings = {}
 local aimbotExclusions = {}
 local aimbotExclusionNames = {}
 local noclipOriginalCollisions = {}
+local originalLightingSettings = nil
+local originalLightingEffects = {}
 local exclusionsLabel = nil
 local PLAYER_FOV = camera and camera.FieldOfView or 70
 local mouseAimbotWarningShown = false
@@ -376,6 +382,21 @@ local function UpdateESPDrawings(model)
 	end
 end
 
+local function IsWithinESPDistance(model)
+	if ESP_DISTANCE_UNCAPPED then
+		return true
+	end
+
+	local _, _, root = GetCharacterParts(model)
+	local localRoot = GetLocalRoot()
+
+	if not root or not localRoot then
+		return false
+	end
+
+	return (localRoot.Position - root.Position).Magnitude <= ESP_DISTANCE_CAP
+end
+
 local function UpdateESPLabel(model)
 	local billboard = model:FindFirstChild("ESPInfo")
 	local label = billboard and billboard:FindFirstChild("Info")
@@ -412,7 +433,7 @@ local function UpdateESPLabel(model)
 end
 
 local function CreateESP(model)
-	if not IsTargetModel(model) then
+	if not IsTargetModel(model) or not IsWithinESPDistance(model) then
 		return
 	end
 
@@ -434,7 +455,7 @@ local function CreateESP(model)
 		billboard.Name = "ESPInfo"
 		billboard.Adornee = head
 		billboard.AlwaysOnTop = true
-		billboard.MaxDistance = 100000
+		billboard.MaxDistance = ESP_DISTANCE_UNCAPPED and 1000000 or ESP_DISTANCE_CAP
 		billboard.Size = UDim2.fromOffset(220, 55)
 		billboard.StudsOffset = Vector3.new(0, 3, 0)
 		billboard.Parent = model
@@ -449,6 +470,12 @@ local function CreateESP(model)
 		label.TextStrokeTransparency = 0.25
 		label.TextWrapped = true
 		label.Parent = billboard
+	end
+
+	local billboard = model:FindFirstChild("ESPInfo")
+
+	if billboard then
+		billboard.MaxDistance = ESP_DISTANCE_UNCAPPED and 1000000 or ESP_DISTANCE_CAP
 	end
 
 	UpdateESPLabel(model)
@@ -471,15 +498,19 @@ end
 
 local function RefreshESP()
 	for model in pairs(espDrawings) do
-		if not model.Parent or not IsTargetModel(model) then
+		if not model.Parent or not IsTargetModel(model) or not IsWithinESPDistance(model) then
 			RemoveESP(model)
 		end
 	end
 
 	for _, model in ipairs(GetTargets()) do
-		CreateESP(model)
-		UpdateESPLabel(model)
-		UpdateESPDrawings(model)
+		if IsWithinESPDistance(model) then
+			CreateESP(model)
+			UpdateESPLabel(model)
+			UpdateESPDrawings(model)
+		else
+			RemoveESP(model)
+		end
 	end
 end
 
@@ -498,10 +529,119 @@ local function SetESP(enabled)
 
 	if espEnabled then
 		for _, model in ipairs(GetTargets()) do
-			CreateESP(model)
+			if IsWithinESPDistance(model) then
+				CreateESP(model)
+			end
 		end
 	else
 		RemoveAllESP()
+	end
+end
+
+local function IsLightingPostEffect(instance)
+	return instance:IsA("BloomEffect")
+		or instance:IsA("BlurEffect")
+		or instance:IsA("ColorCorrectionEffect")
+		or instance:IsA("DepthOfFieldEffect")
+		or instance:IsA("SunRaysEffect")
+end
+
+local function CaptureLightingEffect(instance)
+	if originalLightingEffects[instance] then
+		return
+	end
+
+	if instance:IsA("Atmosphere") then
+		originalLightingEffects[instance] = {
+			Density = instance.Density,
+			Haze = instance.Haze,
+			Glare = instance.Glare
+		}
+	elseif IsLightingPostEffect(instance) then
+		originalLightingEffects[instance] = {
+			Enabled = instance.Enabled
+		}
+	end
+end
+
+local function CaptureLightingSettings()
+	if originalLightingSettings then
+		return
+	end
+
+	originalLightingSettings = {
+		Ambient = Lighting.Ambient,
+		Brightness = Lighting.Brightness,
+		ClockTime = Lighting.ClockTime,
+		ExposureCompensation = Lighting.ExposureCompensation,
+		FogEnd = Lighting.FogEnd,
+		FogStart = Lighting.FogStart,
+		GlobalShadows = Lighting.GlobalShadows,
+		OutdoorAmbient = Lighting.OutdoorAmbient
+	}
+
+	table.clear(originalLightingEffects)
+
+	for _, child in ipairs(Lighting:GetChildren()) do
+		CaptureLightingEffect(child)
+	end
+end
+
+local function ApplyFullbright()
+	if not fullbrightEnabled then
+		return
+	end
+
+	CaptureLightingSettings()
+
+	Lighting.Ambient = Color3.fromRGB(255, 255, 255)
+	Lighting.Brightness = 3
+	Lighting.ClockTime = 14
+	Lighting.ExposureCompensation = 0.25
+	Lighting.FogEnd = 1000000
+	Lighting.FogStart = 0
+	Lighting.GlobalShadows = false
+	Lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
+
+	for _, child in ipairs(Lighting:GetChildren()) do
+		CaptureLightingEffect(child)
+
+		if child:IsA("Atmosphere") then
+			child.Density = 0
+			child.Haze = 0
+			child.Glare = 0
+		elseif IsLightingPostEffect(child) then
+			child.Enabled = false
+		end
+	end
+end
+
+local function RestoreLightingSettings()
+	if originalLightingSettings then
+		for property, value in pairs(originalLightingSettings) do
+			Lighting[property] = value
+		end
+	end
+
+	for instance, settings in pairs(originalLightingEffects) do
+		if instance and instance.Parent then
+			for property, value in pairs(settings) do
+				instance[property] = value
+			end
+		end
+	end
+
+	originalLightingSettings = nil
+	table.clear(originalLightingEffects)
+end
+
+local function SetFullbright(enabled)
+	fullbrightEnabled = enabled
+
+	if fullbrightEnabled then
+		ApplyFullbright()
+	else
+		RestoreLightingSettings()
 	end
 end
 
@@ -1056,6 +1196,44 @@ espSettingsSection:addSlider({
 	TRACER_DISTANCE = tonumber(newValue) or TRACER_DISTANCE
 end):setTooltip("Tracers only draw within this many studs.")
 
+espSettingsSection:addToggle({
+	text = "Uncapped Distance",
+	state = true
+}):bindToEvent("onToggle", function(newState)
+	ESP_DISTANCE_UNCAPPED = newState
+
+	if espEnabled then
+		RefreshESP()
+	end
+end)
+
+espSettingsSection:addSlider({
+	text = "ESP Distance",
+	min = 100,
+	max = 10000,
+	step = 50,
+	val = ESP_DISTANCE_CAP
+}, function(newValue)
+	ESP_DISTANCE_CAP = tonumber(newValue) or ESP_DISTANCE_CAP
+
+	if espEnabled then
+		RefreshESP()
+	end
+end):setTooltip("Used when uncapped distance is off.")
+
+local lightingSection = visualsMenu:addSection({
+	text = "Lighting",
+	side = "right",
+	showMinButton = false
+})
+
+lightingSection:addToggle({
+	text = "Fullbright",
+	state = false
+}):bindToEvent("onToggle", function(newState)
+	SetFullbright(newState)
+end)
+
 local movementSection = playerMenu:addSection({
 	text = "Movement",
 	side = "left",
@@ -1103,6 +1281,7 @@ interfaceSection:addButton({
 	aimbotEnabled = false
 	mouseAimbotEnabled = false
 	aimbotBindHeld = false
+	SetFullbright(false)
 	SetNoclip(false)
 	aimbotFOVCircle.Visible = false
 	SetESP(false)
@@ -1173,6 +1352,7 @@ RunService.RenderStepped:Connect(function()
 		camera.FieldOfView = PLAYER_FOV
 	end
 
+	ApplyFullbright()
 	UpdateNoclip()
 
 	if aimbotEnabled and aimbotBindHeld then
