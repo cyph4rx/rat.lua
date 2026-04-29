@@ -35,7 +35,9 @@ local espTracersEnabled = true
 local espBonesEnabled = true
 local espTeamColorEnabled = true
 local aimbotEnabled = false
+local mouseAimbotEnabled = false
 local wallCheckEnabled = true
+local noclipEnabled = false
 local aimbotBindHeld = false
 local aimbotBindType = Enum.UserInputType.MouseButton2
 local aimbotBindKey = nil
@@ -47,8 +49,10 @@ local espColor = Color3.fromRGB(0, 255, 0)
 local espDrawings = {}
 local aimbotExclusions = {}
 local aimbotExclusionNames = {}
+local noclipOriginalCollisions = {}
 local exclusionsLabel = nil
 local PLAYER_FOV = camera and camera.FieldOfView or 70
+local mouseAimbotWarningShown = false
 local isUnloaded = false
 
 StarterGui:SetCoreGuiEnabled(Enum.CoreGuiType.All, true)
@@ -519,6 +523,88 @@ local function SetPlayerFOV(value)
 	end
 end
 
+local function RestoreNoclipCollisions()
+	for part, canCollide in pairs(noclipOriginalCollisions) do
+		if part and part.Parent then
+			part.CanCollide = canCollide
+		end
+	end
+
+	table.clear(noclipOriginalCollisions)
+end
+
+local function SetNoclip(enabled)
+	noclipEnabled = enabled
+
+	if not noclipEnabled then
+		RestoreNoclipCollisions()
+	end
+end
+
+local function ApplyWallNoclip(character)
+	for _, instance in ipairs(character:GetDescendants()) do
+		if instance:IsA("BasePart") then
+			if noclipOriginalCollisions[instance] == nil then
+				noclipOriginalCollisions[instance] = instance.CanCollide
+			end
+
+			instance.CanCollide = false
+		end
+	end
+end
+
+local function KeepNoclipOnGround(character)
+	local humanoid, _, root = GetCharacterParts(character)
+
+	if not humanoid or not root then
+		return
+	end
+
+	local ignoreList = {character}
+
+	if camera then
+		table.insert(ignoreList, camera)
+	end
+
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = ignoreList
+
+	local origin = root.Position + Vector3.new(0, 1, 0)
+	local result = Workspace:Raycast(origin, Vector3.new(0, -12, 0), params)
+
+	if not result or result.Normal.Y < 0.55 then
+		return
+	end
+
+	local targetY = result.Position.Y + humanoid.HipHeight + (root.Size.Y / 2)
+
+	if root.Position.Y >= targetY then
+		return
+	end
+
+	root.CFrame = root.CFrame + Vector3.new(0, targetY - root.Position.Y, 0)
+
+	if root.AssemblyLinearVelocity.Y < 0 then
+		root.AssemblyLinearVelocity = Vector3.new(root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z)
+	end
+end
+
+local function UpdateNoclip()
+	if not noclipEnabled then
+		return
+	end
+
+	local character = localPlayer.Character
+
+	if not character then
+		return
+	end
+
+	ApplyWallNoclip(character)
+	KeepNoclipOnGround(character)
+end
+
 local function NormalizeName(text)
 	return tostring(text):lower():match("^%s*(.-)%s*$")
 end
@@ -684,6 +770,7 @@ local function GetClosestHeadToCrosshair()
 
 	local viewportCenter = camera.ViewportSize / 2
 	local closestHead = nil
+	local closestScreenPosition = nil
 	local closestDistance = math.huge
 
 	for _, model in ipairs(GetTargets()) do
@@ -698,18 +785,52 @@ local function GetClosestHeadToCrosshair()
 				if IsScreenPointInAimbotFOV(screenPosition) and distance < closestDistance then
 					closestDistance = distance
 					closestHead = head
+					closestScreenPosition = screenPosition
 				end
 			end
 		end
 	end
 
-	return closestHead
+	return closestHead, closestScreenPosition
 end
 
-local function AimAtHead(head)
+local function MoveMouseTowardScreenPosition(screenPosition)
+	camera = Workspace.CurrentCamera
+
+	if not camera or not screenPosition then
+		return false
+	end
+
+	local viewportCenter = camera.ViewportSize / 2
+	local delta = (screenPosition - viewportCenter) * AIMBOT_SMOOTHNESS
+
+	if typeof(mousemoverel) == "function" then
+		return pcall(mousemoverel, delta.X, delta.Y)
+	end
+
+	if typeof(mousemoveabs) == "function" then
+		local nextPosition = viewportCenter + delta
+		return pcall(mousemoveabs, nextPosition.X, nextPosition.Y)
+	end
+
+	return false
+end
+
+local function AimAtHead(head, screenPosition)
 	camera = Workspace.CurrentCamera
 
 	if not camera or not head then
+		return
+	end
+
+	if mouseAimbotEnabled then
+		local movedMouse = MoveMouseTowardScreenPosition(screenPosition)
+
+		if not movedMouse and not mouseAimbotWarningShown then
+			mouseAimbotWarningShown = true
+			Notify("Mouse Aimbot", "Mouse movement is not supported in this executor")
+		end
+
 		return
 	end
 
@@ -774,6 +895,13 @@ aimbotSection:addToggle({
 	state = true
 }):bindToEvent("onToggle", function(newState)
 	wallCheckEnabled = newState
+end)
+
+aimbotSection:addToggle({
+	text = "Mouse Aimbot",
+	state = false
+}):bindToEvent("onToggle", function(newState)
+	mouseAimbotEnabled = newState
 end)
 
 aimbotSection:addSlider({
@@ -954,6 +1082,13 @@ movementSection:addSlider({
 	SetPlayerFOV(newValue)
 end):setTooltip("Changes your camera field of view.")
 
+movementSection:addToggle({
+	text = "Noclip",
+	state = false
+}):bindToEvent("onToggle", function(newState)
+	SetNoclip(newState)
+end)
+
 local interfaceSection = settingsMenu:addSection({
 	text = "Interface",
 	side = "left",
@@ -966,7 +1101,9 @@ interfaceSection:addButton({
 }, function()
 	isUnloaded = true
 	aimbotEnabled = false
+	mouseAimbotEnabled = false
 	aimbotBindHeld = false
+	SetNoclip(false)
 	aimbotFOVCircle.Visible = false
 	SetESP(false)
 	espGui:Destroy()
@@ -1036,11 +1173,13 @@ RunService.RenderStepped:Connect(function()
 		camera.FieldOfView = PLAYER_FOV
 	end
 
+	UpdateNoclip()
+
 	if aimbotEnabled and aimbotBindHeld then
-		local targetHead = GetClosestHeadToCrosshair()
+		local targetHead, targetScreenPosition = GetClosestHeadToCrosshair()
 
 		if targetHead then
-			AimAtHead(targetHead)
+			AimAtHead(targetHead, targetScreenPosition)
 		end
 	end
 
