@@ -43,6 +43,8 @@ local noclipEnabled = false
 local aimbotBindHeld = false
 local aimbotBindType = Enum.UserInputType.MouseButton2
 local aimbotBindKey = nil
+local wallCheckHotkeyType = nil
+local wallCheckHotkeyKey = nil
 
 local AIMBOT_SMOOTHNESS = 0.12
 local AIMBOT_FOV_RADIUS = 150
@@ -57,6 +59,7 @@ local noclipOriginalCollisions = {}
 local originalLightingSettings = nil
 local originalLightingEffects = {}
 local exclusionsLabel = nil
+local wallCheckToggle = nil
 local PLAYER_FOV = camera and camera.FieldOfView or 70
 local mouseAimbotWarningShown = false
 local isUnloaded = false
@@ -820,38 +823,99 @@ local function GetBindName()
 	return aimbotBindType.Name
 end
 
-local function SetAimbotBindFromText(text)
+local function GetInputBindName(inputType, keyCode)
+	if inputType == Enum.UserInputType.Keyboard and keyCode then
+		return keyCode.Name
+	end
+
+	if inputType == Enum.UserInputType.MouseButton2 then
+		return "RMB"
+	elseif inputType == Enum.UserInputType.MouseButton1 then
+		return "LMB"
+	elseif inputType == Enum.UserInputType.MouseButton3 then
+		return "MMB"
+	elseif inputType then
+		return inputType.Name
+	end
+
+	return "none"
+end
+
+local function ParseInputBind(text)
 	local cleaned = tostring(text):gsub("%s+", "")
 	local lowered = cleaned:lower()
 
-	if lowered == "rmb" or lowered == "rightmouse" or lowered == "mousebutton2" then
-		aimbotBindType = Enum.UserInputType.MouseButton2
-		aimbotBindKey = nil
+	if lowered == "" or lowered == "none" or lowered == "clear" then
+		return nil, nil
+	elseif lowered == "rmb" or lowered == "rightmouse" or lowered == "mousebutton2" then
+		return Enum.UserInputType.MouseButton2, nil
 	elseif lowered == "lmb" or lowered == "leftmouse" or lowered == "mousebutton1" then
-		aimbotBindType = Enum.UserInputType.MouseButton1
-		aimbotBindKey = nil
+		return Enum.UserInputType.MouseButton1, nil
 	elseif lowered == "mmb" or lowered == "middlemouse" or lowered == "mousebutton3" then
-		aimbotBindType = Enum.UserInputType.MouseButton3
-		aimbotBindKey = nil
-	else
-		local keyCode = Enum.KeyCode[cleaned]
-
-		if not keyCode and #cleaned == 1 then
-			keyCode = Enum.KeyCode[cleaned:upper()]
-		end
-
-		if not keyCode then
-			Notify("Invalid Bind", "Use RMB, LMB, MMB, or a KeyCode like Q")
-			return false
-		end
-
-		aimbotBindType = Enum.UserInputType.Keyboard
-		aimbotBindKey = keyCode
+		return Enum.UserInputType.MouseButton3, nil
 	end
 
+	local keyCode = Enum.KeyCode[cleaned]
+
+	if not keyCode and #cleaned == 1 then
+		keyCode = Enum.KeyCode[cleaned:upper()]
+	end
+
+	if keyCode then
+		return Enum.UserInputType.Keyboard, keyCode
+	end
+
+	return false, nil
+end
+
+local function SetAimbotBindFromText(text)
+	local inputType, keyCode = ParseInputBind(text)
+
+	if inputType == false or inputType == nil then
+		Notify("Invalid Bind", "Use RMB, LMB, MMB, or a KeyCode like Q")
+		return false
+	end
+
+	aimbotBindType = inputType
+	aimbotBindKey = keyCode
 	aimbotBindHeld = false
 	Notify("Aimbot Bind", "Set to " .. GetBindName())
 	return true
+end
+
+local function SetWallCheckHotkeyFromText(text)
+	local inputType, keyCode = ParseInputBind(text)
+
+	if inputType == false then
+		Notify("Invalid Hotkey", "Use RMB, LMB, MMB, or a KeyCode like Q")
+		return false
+	end
+
+	wallCheckHotkeyType = inputType
+	wallCheckHotkeyKey = keyCode
+
+	if not wallCheckHotkeyType then
+		Notify("Wallcheck Hotkey", "Cleared")
+	else
+		Notify("Wallcheck Hotkey", "Set to " .. GetInputBindName(wallCheckHotkeyType, wallCheckHotkeyKey))
+	end
+
+	return true
+end
+
+local function SetWallCheck(enabled, syncToggle)
+	wallCheckEnabled = enabled
+
+	if syncToggle and wallCheckToggle and typeof(wallCheckToggle.setState) == "function" then
+		pcall(function()
+			wallCheckToggle:setState(wallCheckEnabled)
+		end)
+	end
+end
+
+local function ToggleWallCheckFromHotkey()
+	SetWallCheck(not wallCheckEnabled, true)
+	Notify("Wallcheck", wallCheckEnabled and "Enabled" or "Disabled")
 end
 
 local function IsAimbotBind(input)
@@ -860,6 +924,18 @@ local function IsAimbotBind(input)
 	end
 
 	return input.UserInputType == aimbotBindType
+end
+
+local function IsWallCheckHotkey(input)
+	if not wallCheckHotkeyType then
+		return false
+	end
+
+	if wallCheckHotkeyType == Enum.UserInputType.Keyboard then
+		return input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == wallCheckHotkeyKey
+	end
+
+	return input.UserInputType == wallCheckHotkeyType
 end
 
 local function UpdateAimbotFOVCircle()
@@ -1030,11 +1106,13 @@ aimbotSection:addToggle({
 	aimbotEnabled = newState
 end)
 
-aimbotSection:addToggle({
+wallCheckToggle = aimbotSection:addToggle({
 	text = "Wallcheck",
 	state = true
-}):bindToEvent("onToggle", function(newState)
-	wallCheckEnabled = newState
+})
+
+wallCheckToggle:bindToEvent("onToggle", function(newState)
+	SetWallCheck(newState, false)
 end)
 
 aimbotSection:addToggle({
@@ -1069,6 +1147,12 @@ aimbotSection:addTextbox({
 	text = "Hold Bind"
 }):bindToEvent("onFocusLost", function(text)
 	SetAimbotBindFromText(text)
+end)
+
+aimbotSection:addTextbox({
+	text = "Wallcheck Hotkey"
+}):bindToEvent("onFocusLost", function(text)
+	SetWallCheckHotkeyFromText(text)
 end)
 
 local exclusionsSection = combatMenu:addSection({
@@ -1326,6 +1410,10 @@ end)
 UserInputService.InputBegan:Connect(function(input)
 	if UserInputService:GetFocusedTextBox() then
 		return
+	end
+
+	if IsWallCheckHotkey(input) then
+		ToggleWallCheckFromHotkey()
 	end
 
 	if IsAimbotBind(input) then
