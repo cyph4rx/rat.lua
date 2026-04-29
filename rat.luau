@@ -40,6 +40,7 @@ local aimbotEnabled = false
 local mouseAimbotEnabled = false
 local wallCheckEnabled = true
 local noclipEnabled = false
+local infiniteJumpEnabled = false
 local aimbotBindHeld = false
 local aimbotBindType = Enum.UserInputType.MouseButton2
 local aimbotBindKey = nil
@@ -682,6 +683,10 @@ local function SetNoclip(enabled)
 	if not noclipEnabled then
 		RestoreNoclipCollisions()
 	end
+end
+
+local function SetInfiniteJump(enabled)
+	infiniteJumpEnabled = enabled
 end
 
 local function ApplyWallNoclip(character)
@@ -1351,6 +1356,13 @@ movementSection:addToggle({
 	SetNoclip(newState)
 end)
 
+movementSection:addToggle({
+	text = "Infinite Jump",
+	state = false
+}):bindToEvent("onToggle", function(newState)
+	SetInfiniteJump(newState)
+end)
+
 local interfaceSection = settingsMenu:addSection({
 	text = "Interface",
 	side = "left",
@@ -1367,6 +1379,7 @@ interfaceSection:addButton({
 	aimbotBindHeld = false
 	SetFullbright(false)
 	SetNoclip(false)
+	SetInfiniteJump(false)
 	aimbotFOVCircle.Visible = false
 	SetESP(false)
 	espGui:Destroy()
@@ -1424,6 +1437,19 @@ end)
 UserInputService.InputEnded:Connect(function(input)
 	if IsAimbotBind(input) then
 		aimbotBindHeld = false
+	end
+end)
+
+UserInputService.JumpRequest:Connect(function()
+	if not infiniteJumpEnabled then
+		return
+	end
+
+	local character = localPlayer.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+
+	if humanoid and humanoid.Health > 0 then
+		humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
 	end
 end)
 
