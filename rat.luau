@@ -36,6 +36,8 @@ local espTracersEnabled = true
 local espBonesEnabled = true
 local espTeamColorEnabled = true
 local fullbrightEnabled = false
+local fullbrightSuperBrightEnabled = false
+local terrainGrassDisabled = false
 local aimbotEnabled = false
 local mouseAimbotEnabled = false
 local wallCheckEnabled = true
@@ -53,12 +55,15 @@ local TRACER_DISTANCE = 100
 local ESP_DISTANCE_CAP = 1000
 local ESP_DISTANCE_UNCAPPED = true
 local espColor = Color3.fromRGB(0, 255, 0)
+local espExcludedColor = Color3.fromRGB(255, 0, 0)
 local espDrawings = {}
 local aimbotExclusions = {}
 local aimbotExclusionNames = {}
 local noclipOriginalCollisions = {}
 local originalLightingSettings = nil
 local originalLightingEffects = {}
+local originalTerrainDecoration = nil
+local hasOriginalTerrainDecoration = false
 local exclusionsLabel = nil
 local wallCheckToggle = nil
 local PLAYER_FOV = camera and camera.FieldOfView or 70
@@ -159,8 +164,30 @@ local function IsTargetModel(model)
 	return humanoid ~= nil and humanoid.Health > 0 and head ~= nil and head:IsA("BasePart")
 end
 
+local function NormalizeESPName(text)
+	return tostring(text):lower():match("^%s*(.-)%s*$")
+end
+
+local function IsESPExcluded(model)
+	if aimbotExclusions[NormalizeESPName(model.Name)] then
+		return true
+	end
+
+	local player = Players:GetPlayerFromCharacter(model)
+
+	if player then
+		return aimbotExclusions[NormalizeESPName(player.Name)] or aimbotExclusions[NormalizeESPName(player.DisplayName)]
+	end
+
+	return false
+end
+
 local function GetESPColor(model)
 	local player = Players:GetPlayerFromCharacter(model)
+
+	if IsESPExcluded(model) then
+		return espExcludedColor
+	end
 
 	if espTeamColorEnabled and player then
 		if player.Team then
@@ -598,14 +625,22 @@ local function ApplyFullbright()
 
 	CaptureLightingSettings()
 
-	Lighting.Ambient = Color3.fromRGB(255, 255, 255)
-	Lighting.Brightness = 3
+	if fullbrightSuperBrightEnabled then
+		Lighting.Ambient = Color3.fromRGB(255, 255, 255)
+		Lighting.Brightness = 3
+		Lighting.ExposureCompensation = 0.25
+		Lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
+	else
+		Lighting.Ambient = Color3.fromRGB(170, 170, 170)
+		Lighting.Brightness = 2
+		Lighting.ExposureCompensation = 0
+		Lighting.OutdoorAmbient = Color3.fromRGB(170, 170, 170)
+	end
+
 	Lighting.ClockTime = 14
-	Lighting.ExposureCompensation = 0.25
 	Lighting.FogEnd = 1000000
 	Lighting.FogStart = 0
 	Lighting.GlobalShadows = false
-	Lighting.OutdoorAmbient = Color3.fromRGB(255, 255, 255)
 
 	for _, child in ipairs(Lighting:GetChildren()) do
 		CaptureLightingEffect(child)
@@ -646,6 +681,42 @@ local function SetFullbright(enabled)
 		ApplyFullbright()
 	else
 		RestoreLightingSettings()
+	end
+end
+
+local function ApplyTerrainGrass()
+	if not terrainGrassDisabled then
+		return
+	end
+
+	if not hasOriginalTerrainDecoration then
+		local success, value = pcall(function()
+			return Workspace.Terrain.Decoration
+		end)
+
+		if success then
+			originalTerrainDecoration = value
+			hasOriginalTerrainDecoration = true
+		end
+	end
+
+	pcall(function()
+		Workspace.Terrain.Decoration = false
+	end)
+end
+
+local function SetTerrainGrassDisabled(enabled)
+	terrainGrassDisabled = enabled
+
+	if terrainGrassDisabled then
+		ApplyTerrainGrass()
+	elseif hasOriginalTerrainDecoration then
+		pcall(function()
+			Workspace.Terrain.Decoration = originalTerrainDecoration
+		end)
+
+		originalTerrainDecoration = nil
+		hasOriginalTerrainDecoration = false
 	end
 end
 
@@ -788,6 +859,11 @@ local function SetAimbotExclusionsFromText(text)
 	end
 
 	UpdateExclusionsLabel()
+
+	if espEnabled then
+		RefreshESP()
+	end
+
 	Notify("Aimbot Exclusions", exclusionsLabel and exclusionsLabel:getText() or "Updated excluded players")
 end
 
@@ -795,6 +871,11 @@ local function ClearAimbotExclusions()
 	table.clear(aimbotExclusions)
 	table.clear(aimbotExclusionNames)
 	UpdateExclusionsLabel()
+
+	if espEnabled then
+		RefreshESP()
+	end
+
 	Notify("Aimbot Exclusions", "Excluded: none")
 end
 
@@ -1275,6 +1356,17 @@ espSettingsSection:addColorPicker({
 	end
 end)
 
+espSettingsSection:addColorPicker({
+	text = "Excluded Color",
+	color = espExcludedColor
+}, function(newColor)
+	espExcludedColor = newColor
+
+	if espEnabled then
+		RefreshESP()
+	end
+end)
+
 espSettingsSection:addSlider({
 	text = "Tracer Distance",
 	min = 10,
@@ -1321,6 +1413,24 @@ lightingSection:addToggle({
 	state = false
 }):bindToEvent("onToggle", function(newState)
 	SetFullbright(newState)
+end)
+
+lightingSection:addToggle({
+	text = "Super Bright",
+	state = false
+}):bindToEvent("onToggle", function(newState)
+	fullbrightSuperBrightEnabled = newState
+
+	if fullbrightEnabled then
+		ApplyFullbright()
+	end
+end)
+
+lightingSection:addToggle({
+	text = "Disable Terrain Grass",
+	state = false
+}):bindToEvent("onToggle", function(newState)
+	SetTerrainGrassDisabled(newState)
 end)
 
 local movementSection = playerMenu:addSection({
@@ -1377,7 +1487,9 @@ interfaceSection:addButton({
 	aimbotEnabled = false
 	mouseAimbotEnabled = false
 	aimbotBindHeld = false
+	fullbrightSuperBrightEnabled = false
 	SetFullbright(false)
+	SetTerrainGrassDisabled(false)
 	SetNoclip(false)
 	SetInfiniteJump(false)
 	aimbotFOVCircle.Visible = false
@@ -1467,6 +1579,7 @@ RunService.RenderStepped:Connect(function()
 	end
 
 	ApplyFullbright()
+	ApplyTerrainGrass()
 	UpdateNoclip()
 
 	if aimbotEnabled and aimbotBindHeld then
